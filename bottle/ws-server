@@ -1,0 +1,133 @@
+#!/usr/bin/python
+# -*- coding: utf-8 -*-
+
+import os
+import optparse
+
+from project import application, bottle
+from project.daemon import Daemon
+
+
+def parse_options():
+    usage = '%prog [options]'
+    description = 'WS server'
+    parser = optparse.OptionParser(usage=usage, description=description)
+
+    parser.add_option("--listen-addr", dest="listen_addr", type="string",
+                      help="Set address to listen (default: %default)",
+                      metavar="ADDR",
+                      default="127.0.0.1")
+
+    parser.add_option("--listen-port", dest="listen_port", type="int",
+                      help="Set port to listen (default: %default)",
+                      metavar="ADDR",
+                      default=22223)
+
+    parser.add_option("--server", dest="wsgi_server", type="string",
+                      help="Name of the WSGI server to use (default: %default)",
+                      metavar="SERVER",
+                      default="wsgiref")
+
+    Daemon.add_options_parser(parser)
+
+    (options, actions) = parser.parse_args()
+
+    try:
+        func = getattr(WSGIDaemon, options.wsgi_server)
+    except AttributeError:
+        parser.error("%s is not a supported wsgi server" % options.wsgi_server)
+
+    if options.daemonize and not options.pidfile:
+        parser.error("A pidfile must be supplied in daemon mode")
+
+    return (options, actions)
+
+
+class WSGIDaemon(Daemon):
+
+    def __init__(self, options):
+        Daemon.__init__(self, options.pidfile)
+        self.options = options
+        self.workers = os.sysconf("SC_NPROCESSORS_ONLN") * 2 + 1
+        self.run = getattr(self, self.options.wsgi_server)
+
+    def help(self):
+        for l in sorted(dir(WSGIDaemon)):
+            if l == "help" or l.startswith('__'):
+                continue
+            print l
+
+    def uwsgi(self):
+        # uWSGI fast application server using nginx () [15980 req/s]
+        args = ["uwsgi-python",
+                "--socket", "/tmp/uwsgi.sock",
+                "--chmod-socket", "666"
+                "--single-interpreter",
+                "--master",
+                "--processes", str(self.workers),
+                "--module", "WSServer:application",
+                "--socket-timeout", "30",
+                "--listen", "500",
+                "--disable-logging",
+                ]
+        os.execvp(args[0], args)
+
+    def gevent(self):
+        # Fast async webserver (python-gevent) [8700 req/s]
+        from gevent import monkey
+        monkey.patch_all()
+        from gevent import wsgi
+        #wsgi.WSGIServer((self.options.listen_addr, self.options.listen_port), application, spawn=None).serve_forever()
+        wsgi.WSGIServer((self.options.listen_addr, self.options.listen_port), application).serve_forever()
+
+    def gunicorn(self):
+        # gunicorn (>0.12) [6600 req/s]
+        args = ["gunicorn",
+                "--bind", "%s:%d" % (self.options.listen_addr, self.options.listen_port),
+                "--workers", str(self.workers),
+                "--worker-class", "egg:gunicorn#gevent",
+                "--worker-connections", "10000",
+                "WSServer:application"]
+        os.execvp(args[0], args)
+
+    def tornado(self):
+        # Facebook async webserver (python-tornado) [5300 req/s]
+        import tornado.httpserver
+        import tornado.ioloop
+        import tornado.wsgi
+
+        container = tornado.wsgi.WSGIContainer(application)
+        http_server = tornado.httpserver.HTTPServer(container)
+        http_server.listen(self.options.listen_port)
+        tornado.ioloop.IOLoop.instance().start()
+
+    def paste(self):
+        # Pylons default webserver (python-paste) [1300 req/s]
+        from paste import httpserver
+        httpserver.serve(application, self.options.listen_addr, port=self.options.listen_port, request_queue_size=500)
+
+    def wsgiref(self):
+        # Python default server
+        from wsgiref.simple_server import make_server
+        srv = make_server(self.options.listen_addr, self.options.listen_port, application).serve_forever()
+
+
+if __name__ == "__main__":
+    (options, actions) = parse_options()
+
+    daemon_server = WSGIDaemon(options)
+
+    # Enable debug in verbose mode
+    bottle.debug(True)
+
+    if len(actions) > 0:
+        if 'start' == actions[0]:
+            daemon_server.start()
+        elif 'stop' == actions[0]:
+            daemon_server.stop()
+        elif 'restart' == actions[0]:
+            daemon_server.restart()
+    elif options.daemonize:
+        daemon_server.start()
+    else:
+        daemon_server.run()
