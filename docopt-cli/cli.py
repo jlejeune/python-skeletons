@@ -1,0 +1,77 @@
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+
+"""
+cli
+
+Usage:
+  cli [options] <command> [<args>...]
+
+Commands:
+  action1                    run action1 command
+  action2                    run action2 command
+
+General options:
+  -h --help                 show help message and exit
+  --version                 show version and exit
+  -v --verbose              print status messages
+
+See cli <command> --help for more information on a specific command.
+"""
+
+import sys
+from inspect import getmembers, isclass, getdoc
+from docopt import docopt
+
+from docopt_cli import __version__ as VERSION
+
+
+def main():
+    """Main CLI entrypoint."""
+    import docopt_cli.commands as commands
+    options = docopt(__doc__, version=VERSION, options_first=True)
+
+    # get command arg
+    cmd = options['<command>']
+
+    # test if module or package exists
+    if hasattr(commands, cmd):
+        # determine module to load: test if command is a package
+        f = getattr(commands, cmd)
+        # it's a package
+        if hasattr(f, '__path__'):
+            # determine subcommand class
+            args = options['<args>']
+            if len(args) == 0 or args[0] in ('-h', '--help'):
+                module = f
+            elif f.__name__ + '.' + args[0] in sys.modules:
+                module = sys.modules[f.__name__ + '.' + args[0]]
+            else:
+                sys.exit(
+                    "This subcommand '%s' doesn't exist, try `cli %s --help`" % (args[0], cmd))
+        # it's a module
+        else:
+            module = f
+
+        # determine class
+        short_module_name = module.__name__.split('.')[-1]
+        commands = getmembers(module, isclass)
+        command = [command[1]
+                   for command in commands if command[0].lower() == short_module_name][0]
+
+        # update options with class
+        docstring = getdoc(command)
+        if 'Usage:' in docstring:
+            options.update(
+                docopt(docstring, argv=sys.argv[sys.argv.index(cmd):]))
+
+        # define command and run it
+        command = command(options)
+        command.run()
+
+    else:
+        sys.exit("This command '%s' doesn't exist, try `cli --help`" % cmd)
+
+
+if __name__ == '__main__':
+    main()
