@@ -18,5 +18,5 @@ Usage
 
 Just display help to decide what to do:
 ```
-python clip.py -h
+python cli.py -h
 ```
