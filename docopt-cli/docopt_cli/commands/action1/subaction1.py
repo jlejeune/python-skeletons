@@ -15,5 +15,4 @@ class Subaction1(Action1):
     """
 
     def run(self):
-        #print 'Run action1 subaction1 command'
         print "Execute action1 subaction1 with theses args:\n", self.options
